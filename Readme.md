@@ -64,7 +64,7 @@ permissions:
 
 jobs:
   call-dockerize-workflow:
-    uses: rezamafakheriii/ContainerCraft/.github/workflows/dockerize.yaml@main
+    uses: rezamafakheriii/container_craft/.github/workflows/dockerize.yaml@main
     with:
       path_to_dockerfile: "./web/dockerfile"
       docker_build_dir: "./web"
