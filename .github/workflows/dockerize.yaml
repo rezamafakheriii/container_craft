@@ -1,0 +1,67 @@
+name: Docker image build and publish
+
+on:
+  workflow_call:
+    inputs:
+      path_to_dockerfile:
+        description: Path to the dockerfile (default = 'dockerfile')
+        default: "dockerfile"
+        type: string
+      docker_build_dir:
+        description: Docker build directory (default = '.')
+        default: "."
+        type: string
+      image_tag:
+        description: Tag to apply to images.
+        type: string
+        default: v0.0.1
+      aws_region:
+        description: Target AWS Region
+        default: "us-east-1"
+        type: string
+      ecr_repository_name:
+        description: The name of repository in ECR
+        required: true
+        type: string
+    secrets:
+      aws_account_id:
+        description: Target AWS ECR AccountID
+        required: true
+
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest
+
+    permissions:
+      id-token: write
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.aws_account_id }}:role/GithubActionsRole
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registries: ${{ secrets.aws_account_id }}
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-publish
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ inputs.ecr_repository_name }}
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          docker build "${{ inputs.docker_build_dir }}" -f "${{ inputs.path_to_dockerfile }}" -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+          echo "IMAGE $IMAGE_TAG is pushed to $ECR_REGISTRY/$ECR_REPOSITORY"
+          echo "image_tag=$IMAGE_TAG" 
+          echo "full_image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
