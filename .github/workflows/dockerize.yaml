@@ -14,11 +14,11 @@ on:
       image_tag:
         description: Tag to apply to images.
         type: string
-        default: v0.0.1
+        required: true
       aws_region:
         description: Target AWS Region
-        default: "us-east-1"
         type: string
+        required: true
       ecr_repository_name:
         description: The name of repository in ECR
         required: true
