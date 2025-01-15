@@ -1,0 +1,86 @@
+name: Provision ECR Repository
+
+on:
+  workflow_call:
+    inputs:
+      aws_region:
+        description: Target AWS Region
+        default: "us-east-1"
+        type: string
+      ecr_repository_name:
+        description: The name of repository in ECR
+        required: true
+        type: string
+    secrets:
+      aws_account_id:
+        description: Target AWS ECR AccountID
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  
+  provisioning:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.aws_account_id }}:role/GithubActionsRole
+          aws-region: ${{ inputs.aws_region }}
+        
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_wrapper: false
+      
+      - name: Terraform fmt
+        id: fmt
+        run: terraform fmt -check
+        continue-on-error: false
+
+      - name: Show formatting issues
+        if: failure()
+        run: |
+          echo "Formatting issues detected. Running terraform fmt to show differences:"
+          terraform fmt -diff
+
+
+      - name: TF init
+        shell: bash
+        run: |
+          set -eux
+          terraform init \
+            -backend-config="region=${{ inputs.aws_region }}" \
+            -backend-config="bucket=revotech-terraform-state" \
+            -backend-config="key=default/dev/ecr-${{ inputs.ecr_repository_name }}/terraform.tfstate" \
+        working-directory: ${{ github.action_path }}
+
+      - name: Terraform plan
+        id: plan
+        run: |
+          set -eux
+          terraform plan \
+            -var 'repository_name=${{ inputs.ecr_repository_name }}' \
+            -var 'iam_role=GithubActionsRole' \
+            -var 'aws_account_id=${{ secrets.aws_account_id }}' \
+        working-directory: ${{ github.action_path }}
+
+      - name: Create ECR repo [TF apply]
+        id: create-repo
+        shell: bash
+        run: |
+          set -eux
+          terraform apply \
+            -var 'repository_name=${{ inputs.ecr_repository_name }}' \
+            -var 'iam_role=GithubActionsRole' \
+            -var 'aws_account_id=${{ secrets.aws_account_id }}' \
+            -auto-approve
+        working-directory: ${{ github.action_path }}
+

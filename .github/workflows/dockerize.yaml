@@ -28,14 +28,21 @@ on:
         description: Target AWS ECR AccountID
         required: true
 
+permissions:
+  id-token: write
+  contents: read
 
 jobs:
+  
+  call-workflow-passing-data:
+    uses: ./.github/workflows/ecr-provisioning.yaml
+    with:
+      ecr_repository_name: ${{ inputs.ecr_repository_name }}
+    secrets:
+      aws_account_id: ${{ secrets.aws_account_id }}
+
   docker:
     runs-on: ubuntu-latest
-
-    permissions:
-      id-token: write
-      contents: read
 
     steps:
       - uses: actions/checkout@v3
