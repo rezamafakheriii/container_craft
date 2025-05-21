@@ -24,6 +24,16 @@ on:
       AWS_ACCOUNT_ID:
         required: true
 
+env:
+  GO_PRIVATE: "github.com/revotech-group"
+  ECR_REPOSITORY: ${{ github.repository }}
+  GO_LINT_VERSION: "v2.1.6"
+
+permissions:
+  id-token: write
+  contents: write
+  pull-requests: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
