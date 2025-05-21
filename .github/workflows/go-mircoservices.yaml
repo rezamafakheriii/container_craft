@@ -1,0 +1,137 @@
+name: Go Microservice CI
+
+on:
+  workflow_call:
+    inputs:
+      useGolangLinter:
+        required: false
+        type: boolean
+        default: true
+      goVersion:
+        required: false
+        type: string
+        default: "1.24.x"
+      awsRegion:
+        required: false
+        type: string
+        default: "us-east-1"
+
+    secrets:
+      GH_PAT:
+        required: true
+      TOKEN:
+        required: true
+      AWS_ACCOUNT_ID:
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the repository to the runner
+        uses: actions/checkout@v4
+
+      - name: Release Please
+        uses: googleapis/release-please-action@v4
+        id: release
+        if: github.event_name == 'push'
+        with:
+          token: ${{ secrets.GH_PAT }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+        
+      - name: Setup Go 
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.goVersion }}
+
+      - name: Install Go Service Dependencies
+        run: |
+          git config --global url."https://${{ secrets.TOKEN }}@github.com/".insteadOf "https://github.com/"
+          go env -w GOPRIVATE="${{ env.GO_PRIVATE }}"
+          go mod tidy
+
+      - name: Set GOPATH dynamically
+        id: set-gopath
+        run: echo "GOPATH=$(go env GOPATH)" >> "$GITHUB_ENV"
+
+      - name: Add GOPATH/bin to PATH
+        run: echo "$(go env GOPATH)/bin" >> $GITHUB_PATH
+
+      - name: Cache golangci-lint binary
+        if: ${{ inputs.useGolangLinter }}
+        id: cache-golint
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.GOPATH }}/bin
+          key: ${{ runner.os }}-golangci-lint-${{env.GO_LINT_VERSION}}-${{ hashFiles('.custom-gcl.yml') }}
+
+      - name: Run Go Vulnerability Check (govulncheck)
+        run: |
+          echo "🔍 Installing govulncheck..."
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+
+          echo "🔍 Running govulncheck..."
+          govulncheck ./... | tee vulncheck.txt
+
+          if [ "$(wc -l < vulncheck.txt)" -gt 1 ]; then
+            echo "❌ Potential vulnerabilities found or unexpected output:"
+            cat vulncheck.txt
+            exit 1
+          else
+            echo "✅ No vulnerabilities found."
+          fi
+
+      - name: Install golangci-lint
+        if: inputs.useGolangLinter && steps.cache-golint.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p $(go env GOPATH)/bin
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b $(go env GOPATH)/bin ${{env.GO_LINT_VERSION}}
+          $(go env GOPATH)/bin/golangci-lint --version
+
+      - name: Generate custom-gcl binary
+        if: inputs.useGolangLinter && steps.cache-golint.outputs.cache-hit != 'true'
+        run: |
+          golangci-lint custom
+          mv ./custom-gcl $(go env GOPATH)/bin
+
+      - name: Run custom-gcl
+        if: inputs.useGolangLinter
+        run: |
+          custom-gcl run
+
+      - name: Test Service
+        run: |
+          echo "Running tests..."
+          go test -v ./...
+
+      - name: Configure AWS Credentials
+        if: steps.release.outputs.releases_created == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/GithubActionsRole
+          aws-region: ${{ inputs.awsRegion }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        if: steps.release.outputs.releases_created == 'true'
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create ECR Repository if not exists
+        id: create-ecr-repo
+        if: steps.release.outputs.releases_created == 'true'
+        run: |
+          aws ecr describe-repositories --repository-names $ECR_REPOSITORY || aws ecr create-repository --repository-name $ECR_REPOSITORY
+
+      - name: Build, tag, and push image to Amazon ECR
+        id: build-publish
+        if: steps.release.outputs.releases_created == 'true'
+        shell: bash
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          IMAGE_TAG: ${{ steps.release.outputs.tag_name }}
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        run: |
+          docker build --build-arg GITHUB_TOKEN=$GITHUB_TOKEN -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> $GITHUB_OUTPUT
